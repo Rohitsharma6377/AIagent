@@ -1,78 +1,87 @@
 import os
 import sys
+import time
 import asyncio
+import random
+from datetime import datetime
+from dotenv import load_dotenv
 
-# Add the project root to the Python path to resolve module import issues
+# Add project root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dotenv import load_dotenv
-import random
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-
-from src.content_creation.creator import create_video_ffmpeg
+from src.trending.google_trends import TrendingTopicsFetcher
+from src.content_creation.creator import create_video
 from src.youtube.uploader import upload_to_youtube
 from src.instagram.uploader import upload_reel
 
-# --- Configuration ---
-TARGET_PLATFORM = 'both'  # 'youtube', 'instagram', or 'both'
+async def create_and_upload_youtube_video(topic, output_dir):
+    """Creates and uploads a 3-minute YouTube video."""
+    try:
+        print(f"\n--- Creating 3-Minute YouTube Video for: {topic} ---")
+        video_path = await create_video(
+            topic=topic,
+            duration=180,  # 3 minutes
+            aspect_ratio='landscape',
+            output_dir=output_dir
+        )
+        
+        if video_path and os.path.exists(video_path):
+            print(f"\n--- Uploading to YouTube: {topic} ---")
+            title = f"{topic} (Full Video in Hindi)"
+            description = f"A detailed 3-minute video exploring {topic}. All content is AI-generated."
+            tags = ['AI', 'DeepDive', 'Hindi', 'Tech', topic]
+            upload_to_youtube(video_path, title, description, tags)
+        
+    except Exception as e:
+        print(f"An error occurred during YouTube video processing for '{topic}': {e}")
+        print("This may be due to an API quota issue. Continuing to the next task.")
 
-# Test topic (while trends fetching is being fixed)
-TEST_TOPICS = [
-    "Artificial Intelligence in 2024",
-    "Latest Technology Trends",
-    "Digital Innovation Today",
-    "Future of Technology"
-]
-
-async def main():
-    """
-    Main function to run the video creation and uploading process.
-    """
-    load_dotenv()
-    
-    # Use a test topic instead of fetching trends
-    video_topic = random.choice(TEST_TOPICS)
-    print(f"\nSelected Topic for Video: '{video_topic}'")
-
-    # --- Video Specifications (now using the test topic) ---
-    youtube_title = f"AI-Generated Short on {video_topic}"
-    youtube_description = f"A 1-minute AI-generated YouTube Short about {video_topic}."
-    youtube_tags = ["AI", "Shorts", "Tech", video_topic]
-    instagram_caption = f"Check out this reel on {video_topic}! #AI #Tech #Future #{video_topic.replace(' ', '')}"
-
-    if TARGET_PLATFORM in ['youtube', 'both']:
-        print("--- Starting YouTube Video Process ---")
-        video_path = await create_video_ffmpeg(
-            topic=video_topic,
+async def create_and_upload_instagram_reel(topic, output_dir):
+    """Creates and uploads a 1-minute Instagram Reel."""
+    try:
+        print(f"\n--- Creating 1-Minute Instagram Reel for: {topic} ---")
+        reel_path = await create_video(
+            topic=topic,
             duration=60,  # 1 minute
-            aspect_ratio='portrait'
+            aspect_ratio='portrait',
+            output_dir=output_dir
         )
-        if video_path:
-            print(f"YouTube video created: {video_path}")
-            upload_to_youtube(
-                file_path=video_path,
-                title=youtube_title,
-                description=youtube_description,
-                tags=youtube_tags
-            )
-        else:
-            print("Failed to create video for YouTube. Skipping upload.")
+        
+        if reel_path and os.path.exists(reel_path):
+            print(f"\n--- Uploading to Instagram: {topic} ---")
+            caption = f"🎥 {topic}\n\n#HindiReels #Tech #AI #Trending #{topic.replace(' ', '')}"
+            await upload_reel(reel_path, caption)
 
-    if TARGET_PLATFORM in ['instagram', 'both']:
-        print("\n--- Starting Instagram Reel Process ---")
-        reel_path = await create_video_ffmpeg(
-            topic=video_topic,
-            duration=30,  # 30 seconds
-            aspect_ratio='portrait'
-        )
-        if reel_path:
-            print(f"Instagram Reel created: {reel_path}")
-            upload_reel(
-                video_path=reel_path,
-                caption=instagram_caption
-            )
-        else:
-            print("Failed to create Reel for Instagram. Skipping upload.")
+    except Exception as e:
+        print(f"An error occurred during Instagram Reel processing for '{topic}': {e}")
+        print("This may be due to an API quota issue. Continuing to the next task.")
+
+
+async def main_cycle(output_dir):
+    """Runs one complete cycle of fetching a topic and creating videos."""
+    trends_fetcher = TrendingTopicsFetcher(region='IN')
+    topics = trends_fetcher.get_topics()
+    
+    if not topics:
+        print("Could not fetch any topics. Waiting for the next cycle.")
+        return
+        
+    topic = random.choice(topics)
+    print(f"\n>>> Selected Topic for this cycle: {topic} <<<")
+
+    await create_and_upload_youtube_video(topic, output_dir)
+    await create_and_upload_instagram_reel(topic, output_dir)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    load_dotenv()
+    
+    if not os.path.exists('client_secrets.json'):
+        print("FATAL: client_secrets.json not found. Please obtain it from Google Cloud Console.")
+    else:
+        output_dir = os.path.join("output", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+        os.makedirs(output_dir, exist_ok=True)
+        
+        asyncio.run(main_cycle(output_dir))
+        
+        print("\n\n>>> Process complete. <<<")

@@ -1,171 +1,134 @@
 import os
+import shutil
 import asyncio
 import requests
-import subprocess
-import tempfile
-from gtts import gTTS
-from imageio_ffmpeg import get_ffmpeg_exe
+import textwrap
+import random
+from moviepy.editor import (
+    VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip,
+    concatenate_videoclips, TextClip
+)
 from src.content_creation.script_generator import generate_script
+from src.content_creation.voice_generator import generate_realistic_voice
 
-async def create_video_ffmpeg(topic, duration, aspect_ratio, output_dir=".", language='en'):
+# Subtitle creation is temporarily removed to prevent ImageMagick errors.
+# def create_subtitle_clips(script, video_duration, video_size):
+#     ...
+
+async def download_media(url, path):
+    """Asynchronously downloads a file."""
+    with requests.get(url, stream=True) as r:
+        r.raise_for_status()
+        with open(path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir: str = "."):
     """
-    Creates a video about a given topic using FFmpeg.
-
-    Args:
-        topic (str): The topic of the video.
-        duration (int): The target duration of the video in seconds.
-        aspect_ratio (str): 'landscape' (16:9) or 'portrait' (9:16).
-        output_dir (str): The directory to save the output files.
-        language (str): Language for TTS ('en' for English, 'hi' for Hindi)
-
-    Returns:
-        str: The path to the created video file, or None if failed.
+    Creates a high-quality video, storing all intermediate files in a sub-folder of the output directory.
     """
     api_key = os.getenv("PEXELS_API_KEY")
     if not api_key:
-        print("Error: PEXELS_API_KEY environment variable not set.")
-        return None
+        raise ValueError("PEXELS_API_KEY environment variable not set.")
 
-    # Create temporary directory for intermediate files
-    with tempfile.TemporaryDirectory() as temp_dir:
+    temp_dir = os.path.join(output_dir, f"temp_{topic.replace(' ', '_')}_{random.randint(1000, 9999)}")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    video_clips_handles = []
+    
+    try:
         audio_path = os.path.join(temp_dir, "voiceover.mp3")
-        video_path = os.path.join(temp_dir, "background.mp4")
-        music_path = os.path.join(temp_dir, "background_music.mp3")
-        mixed_audio_path = os.path.join(temp_dir, "mixed_audio.mp3")
-        final_video_path = os.path.join(output_dir, f"{topic.replace(' ', '_')}_{aspect_ratio}_{language}.mp4")
-
-        # 1. Generate Audio using AI Script
-        print("Generating AI script for the audio...")
-        script = generate_script(topic, duration, language)
+        music_path = os.path.join(temp_dir, "music.mp3")
         
-        print("Generating audio from script...")
-        try:
-            tts = gTTS(text=script, lang=language, slow=False)
-            tts.save(audio_path)
-        except Exception as e:
-            print(f"Failed to generate audio: {e}")
-            return None
+        print(f"\n1. Generating {int(duration/60)} min script for '{topic}'...")
+        script = generate_script(topic, duration)
+        generate_realistic_voice(script, audio_path)
+        
+        with AudioFileClip(audio_path) as voiceover_clip:
+            actual_duration = voiceover_clip.duration
 
-        # 2. Download Background Video
-        print(f"Finding {aspect_ratio} background video...")
-        try:
-            # Convert aspect ratio to Pexels format
-            orientation = 'landscape' if aspect_ratio == 'landscape' else 'portrait'
+        print("2. Downloading background videos and music...")
+        orientation = 'portrait' if aspect_ratio == 'portrait' else 'landscape'
+        
+        # Limit the number of clips to download.
+        num_clips = 3 if aspect_ratio == 'portrait' else 5
+        
+        search_url = f"https://api.pexels.com/videos/search?query={topic}&per_page={num_clips}&orientation={orientation}"
+        
+        response = requests.get(search_url, headers={'Authorization': api_key})
+        response.raise_for_status()
+        videos_json = response.json().get('videos', [])
+        if not videos_json:
+            raise ValueError(f"No videos found for topic: {topic}")
+
+        download_tasks = []
+        video_paths = []
+        for i, video_data in enumerate(videos_json):
+            video_url = next((f['link'] for f in video_data['video_files'] if f['quality'] == 'hd'), video_data['video_files'][0]['link'])
+            video_path = os.path.join(temp_dir, f"video_{i}.mp4")
+            video_paths.append(video_path)
+            download_tasks.append(download_media(video_url, video_path))
+
+        music_url = "https://www.bensound.com/bensound-music/bensound-creativeminds.mp3"
+        download_tasks.append(download_media(music_url, music_path))
+        
+        await asyncio.gather(*download_tasks)
+
+        print("3. Assembling video with transitions and effects...")
+        
+        video_clips_handles = [VideoFileClip(vp) for vp in video_paths if os.path.exists(vp)]
+        
+        with concatenate_videoclips(video_clips_handles, method="compose") as background_video, \
+             AudioFileClip(music_path).volumex(0.1) as music_clip, \
+             AudioFileClip(audio_path) as voiceover_clip_handle:
+
+            final_audio = CompositeAudioClip([voiceover_clip_handle, music_clip.set_duration(voiceover_clip_handle.duration)])
+            background_video.audio = final_audio
+            if voiceover_clip_handle.duration < background_video.duration:
+                background_video = background_video.subclip(0, voiceover_clip_handle.duration)
+
+            # Subtitles are disabled to fix the ImageMagick error.
+            final_clip = background_video
             
-            # Search terms for more engaging videos
-            search_terms = {
-                'en': ['cinematic', 'beautiful', 'aesthetic'],
-                'hi': ['indian', 'beautiful', 'cinematic']
-            }
-            
-            # Add relevant search terms based on language
-            enhanced_topic = f"{topic} {' '.join(search_terms[language])}"
-            
-            # Search for videos using Pexels API
-            headers = {'Authorization': api_key}
-            search_url = f'https://api.pexels.com/videos/search?query={enhanced_topic}&per_page=1&orientation={orientation}'
-            
-            response = requests.get(search_url, headers=headers)
-            response.raise_for_status()
-            
-            videos = response.json().get('videos', [])
-            if not videos:
-                print(f"No {aspect_ratio} videos found for topic: {enhanced_topic}")
-                return None
-            
-            # Get the video URL (prefer HD quality if available)
-            video = videos[0]
-            video_files = video.get('video_files', [])
-            video_url = next(
-                (f['link'] for f in video_files if f.get('quality') == 'hd'),
-                video_files[0]['link'] if video_files else None
+            final_video_path = os.path.join(output_dir, f"{topic.replace(' ', '_')}_{aspect_ratio}.mp4")
+            final_clip.write_videofile(
+                final_video_path,
+                codec='libx264',
+                audio_codec='aac',
+                temp_audiofile=os.path.join(temp_dir, 'temp-audio.m4a'),
+                remove_temp=True,
+                threads=4,
+                preset='ultrafast',
+                logger='bar'
             )
-            
-            if not video_url:
-                print("No suitable video file found.")
-                return None
-            
-            # Download the video
-            print(f"Downloading video from {video_url}...")
-            with requests.get(video_url, stream=True) as r:
-                r.raise_for_status()
-                with open(video_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192): 
-                        f.write(chunk)
+        
+        print(f"Video created successfully: {final_video_path}")
+        created_successfully = True
+        return final_video_path
 
-            # Download background music (you can add your own royalty-free music)
-            # For now, we'll create a silent audio file as a placeholder
-            ffmpeg_exe = get_ffmpeg_exe()
-            subprocess.run([
-                ffmpeg_exe,
-                '-f', 'lavfi',
-                '-i', 'anullsrc=r=44100:cl=stereo',
-                '-t', '10',
-                '-q:a', '0',
-                '-acodec', 'libmp3lame',
-                music_path
-            ], check=True, capture_output=True)
-
-            # Mix voiceover with background music
-            subprocess.run([
-                ffmpeg_exe,
-                '-i', audio_path,
-                '-i', music_path,
-                '-filter_complex',
-                '[1:a]volume=0.2[music];[0:a][music]amix=duration=longest',
-                '-c:a', 'libmp3lame',
-                mixed_audio_path
-            ], check=True, capture_output=True)
-
-        except Exception as e:
-            print(f"Failed to prepare media: {e}")
-            return None
-
-        # 3. Create final video with FFmpeg
-        print("Creating final video with FFmpeg...")
-        try:
-            # Add video effects and combine with mixed audio
-            cmd = [
-                ffmpeg_exe,
-                '-stream_loop', '-1',          # Loop the video input
-                '-i', video_path,
-                '-i', mixed_audio_path,
-                '-vf', 'scale=w=-2:h=1920,fps=30',  # Scale video maintaining aspect ratio
-                '-c:v', 'libx264',
-                '-preset', 'slow',             # Better quality
-                '-crf', '22',                  # High quality (lower value = higher quality)
-                '-c:a', 'aac',
-                '-b:a', '192k',               # High quality audio
-                '-map', '0:v:0',
-                '-map', '1:a:0',
-                '-t', str(duration),           # Set total duration
-                '-shortest',
-                final_video_path
-            ]
-            
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-            print(f"Video created successfully: {final_video_path}")
-            return final_video_path
-
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to create video with FFmpeg. Error: {e.stderr}")
-            return None
-        except Exception as e:
-            print(f"An unexpected error occurred during video creation: {e}")
-            return None
+    finally:
+        # This block ensures all file handles are closed, even if an error occurred.
+        for clip in video_clips_handles:
+            try:
+                clip.close()
+            except Exception:
+                pass
+        
+        # Only delete the temp folder if the video was created successfully.
+        if created_successfully and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            print(f"Cleaned up temporary directory: {temp_dir}")
 
 if __name__ == '__main__':
-    # For direct testing
-    async def test_creator():
-        from dotenv import load_dotenv
-        load_dotenv()
-        if not os.getenv("PEXELS_API_KEY"):
-            print("Please set the PEXELS_API_KEY environment variable to test.")
-        else:
-            print("\nCreating English Landscape Video...")
-            await create_video_ffmpeg("Technology Trends", 10, "landscape", language='en')
-            
-            print("\nCreating Hindi Portrait Video...")
-            await create_video_ffmpeg("प्रौद्योगिकी का भविष्य", 30, "portrait", language='hi')
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    async def run_test():
+        output_folder = "test_videos"
+        os.makedirs(output_folder, exist_ok=True)
+        try:
+            await create_video("The Future of Renewable Energy", 60, "portrait", output_folder)
+        except Exception as e:
+            print(f"Test failed: {e}")
 
-    asyncio.run(test_creator()) 
+    asyncio.run(run_test())

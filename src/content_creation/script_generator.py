@@ -2,71 +2,61 @@ import os
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-def generate_script(topic, duration, language='en'):
+def generate_script(topic: str, duration: int) -> str:
     """
-    Generate a script about a topic using Google's Generative AI.
-    
+    Generate a detailed script in Hindi for a video of a specific duration.
+
     Args:
-        topic (str): The topic to generate content about
-        duration (int): Target duration in seconds
-        language (str): 'en' for English, 'hi' for Hindi
-    
+        topic (str): The topic for the script (can be in English).
+        duration (int): The target duration of the video in seconds.
+
     Returns:
-        str: The generated script
+        str: The generated script in Hindi.
     """
     load_dotenv()
     api_key = os.getenv('GOOGLE_API_KEY')
     if not api_key:
-        print("Error: GOOGLE_API_KEY environment variable not set")
-        return "Sample script for testing."
+        raise ValueError("GOOGLE_API_KEY environment variable not set.")
 
-    # Configure the generative AI model
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
-    # Calculate approximate word count based on duration
-    # Average speaking speed: ~150 words per minute
-    target_words = (duration / 60) * 150
+    # Approximate words per second for a clear speaking pace.
+    words_per_second = 2.5
+    target_words = int(duration * words_per_second)
 
-    # Define prompts based on language
-    prompts = {
-        'en': f"""Write an engaging and conversational script about {topic}.
-                The script should be approximately {int(target_words)} words long.
-                Make it informative yet casual, like you're talking to a friend.
-                Focus on the most interesting aspects and recent developments.
-                Don't use complex words or technical jargon.
-                Don't mention dates or statistics that could become outdated.
-                End with a thought-provoking conclusion.""",
+    prompt = f"""
+        आपको एक {int(duration / 60)} मिनट के यूट्यूब वीडियो के लिए एक विस्तृत और आकर्षक स्क्रिप्ट लिखनी है।
         
-        'hi': f""""{topic}" के बारे में एक आकर्षक और बातचीत की शैली में स्क्रिप्ट लिखें।
-                स्क्रिप्ट लगभग {int(target_words)} शब्दों की होनी चाहिए।
-                इसे जानकारीपूर्ण लेकिन सरल रखें, जैसे आप किसी दोस्त से बात कर रहे हैं।
-                सबसे दिलचस्प पहलुओं और हाल के विकास पर ध्यान दें।
-                जटिल शब्दों या तकनीकी शब्दजाल का उपयोग न करें।
-                ऐसी तारीखें या आंकड़े न दें जो पुराने हो सकते हैं।
-                एक विचारोत्तेजक निष्कर्ष के साथ समाप्त करें।"""
-    }
+        विषय: "{topic}"
+        
+        भाषा: केवल हिंदी।
+        
+        कुल शब्द: लगभग {target_words} शब्द।
+
+        स्क्रिप्ट की संरचना इस प्रकार होनी चाहिए:
+        1.  **आकर्षक परिचय (Engaging Hook):** 15-20 सेकंड। दर्शकों का ध्यान खींचने के लिए एक दिलचस्प तथ्य, सवाल या कहानी से शुरुआत करें।
+        2.  **मुख्य सामग्री (Main Content):** विषय को 3-4 मुख्य भागों में विभाजित करें। प्रत्येक भाग को विस्तार से समझाएं, उदाहरण दें और इसे सरल और समझने योग्य भाषा में प्रस्तुत करें।
+        3.  **निष्कर्ष (Conclusion):** 30 सेकंड। मुख्य बिंदुओं को सारांशित करें और दर्शकों को एक कॉल-टू-एक्शन दें (जैसे 'लाइक करें', 'सब्सक्राइब करें') या एक विचारोत्तेजक प्रश्न पूछें।
+
+        यह सुनिश्चित करें कि स्क्रिप्ट स्वाभाविक और बातचीत की शैली में हो। जटिल शब्दों से बचें।
+        कृपया केवल अंतिम स्क्रिप्ट का हिंदी टेक्स्ट ही प्रदान करें।
+        """
 
     try:
-        # Generate the script
-        response = model.generate_content(prompts[language])
+        response = model.generate_content(prompt)
         script = response.text.strip()
-        
-        print(f"Successfully generated script for topic: {topic}")
+        print(f"Successfully generated {int(duration/60)}-minute script for topic: {topic}")
         return script
     except Exception as e:
         print(f"Error generating script: {e}")
-        return "Error generating script. Using fallback content."
+        raise
 
 if __name__ == "__main__":
-    # Test script generation
-    from dotenv import load_dotenv
     load_dotenv()
-    
-    print("\nTesting English Script Generation:")
+    print("\nTesting 1-minute Hindi Script Generation:")
     print("-" * 50)
-    print(generate_script("Future of AI", 60, 'en'))
-    
-    print("\nTesting Hindi Script Generation:")
-    print("-" * 50)
-    print(generate_script("आर्टिफिशियल इंटेलिजेंस का भविष्य", 60, 'hi'))
+    try:
+        print(generate_script("Artificial Intelligence", 60))
+    except Exception as e:
+        print(e)

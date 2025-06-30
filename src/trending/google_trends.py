@@ -1,82 +1,63 @@
+import os
+import json
+import random
 import asyncio
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from datetime import datetime, timedelta
+from pytrends.request import TrendReq
 
-async def get_daily_trends(geo='US'):
-    """
-    Scrapes the daily trending topics from Google Trends.
+CATEGORIES = {
+    'SPORTS': 'all',
+    'BUSINESS': 'b',
+    'TECHNOLOGY': 't',
+    'ENTERTAINMENT': 'e',
+    'HEALTH': 'm',
+    'SCIENCE': 's'
+}
 
-    Args:
-        geo (str): The two-letter country code for the trends region (e.g., 'US', 'IN').
+FALLBACK_TOPICS = {
+    'SPORTS': ['Latest Cricket Highlights', 'Football Skills', 'Top 10 Athletes'],
+    'BUSINESS': ['Startup Success Stories', 'Investment Tips', 'Future of Work'],
+    'TECHNOLOGY': ['AI Breakthroughs', 'New Gadgets 2024', '5G Technology Explained'],
+    'ENTERTAINMENT': ['Best Movies of the Year', 'Celebrity News', 'New Music Releases'],
+    'HEALTH': ['Mindfulness and Meditation', 'Healthy Eating Tips', 'At-Home Workouts'],
+    'SCIENCE': ['Space Discoveries', 'Climate Change Solutions', 'The Human Brain']
+}
 
-    Returns:
-        list: A list of trending topic strings, or an empty list if scraping fails.
-    """
-    print(f"Fetching daily trends from Google Trends for region: {geo}...")
-    trends_list = []
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        
+class TrendingTopicsFetcher:
+    def __init__(self, region='IN'):
+        self.region = region
+        # Note: 'urllib3<2.0' is required for the current version of pytrends
+        self.pytrends = TrendReq(hl='en-US', tz=330, retries=3, backoff_factor=0.5)
+
+    def get_topics(self, category_name=None):
+        """
+        Gets a list of trending topics. If the API fails, uses a fallback list.
+        """
         try:
-            # Navigate to the daily trends page
-            url = f"https://trends.google.com/trends/trendingsearches/daily?geo={geo}"
-            await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-
-            # This is the critical part: Wait for the specific element that holds the trend data.
-            trends_container_selector = 'md-list.feed-list'
-            await page.wait_for_selector(trends_container_selector, timeout=20000)
-            
-            # Extract the text from each trend item
-            trend_elements = await page.query_selector_all('div.feed-item-header > a')
-            
-            if not trend_elements:
-                print("Could not find trend elements. The page structure might have changed.")
-                
-            for element in trend_elements:
-                trend_text = await element.inner_text()
-                if trend_text:
-                    trends_list.append(trend_text.strip())
-            
-            if trends_list:
-                print(f"Successfully fetched {len(trends_list)} trends.")
-            else:
-                print("Failed to fetch trends. The list was empty.")
-
-        except PlaywrightTimeoutError:
-            print(f"Timeout while waiting for trends page to load for geo={geo}. The page may be slow, require a captcha, or has changed.")
-            await page.screenshot(path=f'trends_timeout_error_{geo}.png')
-            print(f"A screenshot 'trends_timeout_error_{geo}.png' has been saved for debugging.")
+            print(f"Fetching trends for {category_name or 'all categories'}...")
+            df = self.pytrends.trending_searches(pn=self.region.lower())
+            return df[0].tolist()
         except Exception as e:
-            print(f"An error occurred while scraping Google Trends for geo={geo}: {e}")
-            await page.screenshot(path=f'trends_general_error_{geo}.png')
-            print(f"A screenshot 'trends_general_error_{geo}.png' has been saved for debugging.")
-        finally:
-            await browser.close()
+            print(f"Error fetching trends: {e}. Using fallback topics.")
+            if category_name and category_name in FALLBACK_TOPICS:
+                return FALLBACK_TOPICS[category_name]
             
-    return trends_list
+            all_fallback = []
+            for topics in FALLBACK_TOPICS.values():
+                all_fallback.extend(topics)
+            return all_fallback
 
-if __name__ == '__main__':
-    # For direct testing of this module
-    async def test_trends():
-        print("--- Testing Google Trends Scraper ---")
-        
-        print("\n[1] Fetching for United States (US)...")
-        us_trends = await get_daily_trends(geo='US')
-        if us_trends:
-            print("\nTop 5 US Trends:")
-            for i, trend in enumerate(us_trends[:5]):
-                print(f"  {i+1}. {trend}")
-        else:
-            print("  No trends found for US.")
-        
-        print("\n[2] Fetching for India (IN)...")
-        in_trends = await get_daily_trends(geo='IN')
-        if in_trends:
-            print("\nTop 5 India Trends:")
-            for i, trend in enumerate(in_trends[:5]):
-                print(f"  {i+1}. {trend}")
-        else:
-            print("  No trends found for IN.")
+    def get_random_topic(self, category=None):
+        trends = asyncio.run(self.get_topics(category))
+        return random.choice(trends) if trends else None
 
-    asyncio.run(test_trends()) 
+if __name__ == "__main__":
+    fetcher = TrendingTopicsFetcher(region='IN')
+    
+    print("\nFetching trends for all categories (will use fallback on error)...")
+    all_trends = fetcher.get_topics()
+    print(f"Sample topics: {all_trends[:5]}")
+    
+    print("\nGetting topics for Technology...")
+    tech_topics = fetcher.get_topics('TECHNOLOGY')
+    print(f"Sample tech topics: {tech_topics[:3]}")

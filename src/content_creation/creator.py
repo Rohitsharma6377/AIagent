@@ -8,6 +8,7 @@ from moviepy.editor import (
     VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip,
     concatenate_videoclips, TextClip
 )
+import moviepy.audio.fx.all as afx
 from src.content_creation.script_generator import generate_script
 from src.content_creation.voice_generator import generate_realistic_voice
 
@@ -35,6 +36,7 @@ async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir:
     os.makedirs(temp_dir, exist_ok=True)
     
     video_clips_handles = []
+    created_successfully = False
     
     try:
         audio_path = os.path.join(temp_dir, "voiceover.mp3")
@@ -82,7 +84,9 @@ async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir:
              AudioFileClip(music_path).volumex(0.1) as music_clip, \
              AudioFileClip(audio_path) as voiceover_clip_handle:
 
-            final_audio = CompositeAudioClip([voiceover_clip_handle, music_clip.set_duration(voiceover_clip_handle.duration)])
+            looped_music = afx.audio_loop(music_clip, duration=voiceover_clip_handle.duration)
+
+            final_audio = CompositeAudioClip([voiceover_clip_handle, looped_music])
             background_video.audio = final_audio
             if voiceover_clip_handle.duration < background_video.duration:
                 background_video = background_video.subclip(0, voiceover_clip_handle.duration)
@@ -97,7 +101,7 @@ async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir:
                 audio_codec='aac',
                 temp_audiofile=os.path.join(temp_dir, 'temp-audio.m4a'),
                 remove_temp=True,
-                threads=4,
+                threads=2,
                 preset='ultrafast',
                 logger='bar'
             )

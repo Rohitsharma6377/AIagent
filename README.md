@@ -18,7 +18,7 @@ This project is an AI agent that automates the creation and uploading of YouTube
     ├── content_creation
     │   ├── __init__.py
     │   ├── script_generator.py
-    │   ├── video_creator.py
+    │   ├── creator.py
     │   └── voice_generator.py
     ├── instagram
     │   ├── __init__.py

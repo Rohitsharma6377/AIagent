@@ -79,9 +79,11 @@ if __name__ == "__main__":
     if not os.path.exists('client_secrets.json'):
         print("FATAL: client_secrets.json not found. Please obtain it from Google Cloud Console.")
     else:
-        output_dir = os.path.join("output", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-        os.makedirs(output_dir, exist_ok=True)
-        
-        asyncio.run(main_cycle(output_dir))
-        
-        print("\n\n>>> Process complete. <<<")
+        while True:
+            output_dir = os.path.join("output", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+            os.makedirs(output_dir, exist_ok=True)
+            
+            asyncio.run(main_cycle(output_dir))
+            
+            print("\n\n>>> Cycle complete. Waiting for 5 minutes before starting the next one... <<<")
+            time.sleep(300)

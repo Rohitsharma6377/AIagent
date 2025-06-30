@@ -1,0 +1,23 @@
+# For Google Trends
+google-trends
+
+# For Content Generation (LLM)
+google-generativeai
+
+# For Text-to-Speech
+gTTS
+
+# For Video Editing
+moviepy
+Pillow
+
+# For Stock Footage/Images (Example)
+# pexels-api - Note: You will need an API key
+
+# For YouTube API
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+# For Instagram API (Unofficial)
+instagrapi

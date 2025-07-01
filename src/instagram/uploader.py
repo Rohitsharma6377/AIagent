@@ -2,6 +2,7 @@ import os
 import asyncio
 from pathlib import Path
 from instagrapi import Client
+from instagrapi.exceptions import LoginRequired
 from dotenv import load_dotenv
 
 async def upload_reel(video_path, caption, first_comment=""):
@@ -39,12 +40,23 @@ async def upload_reel(video_path, caption, first_comment=""):
         )
         print("Reel uploaded successfully!")
         
+        if media and media.id:
+            print(f"  - Media ID: {media.id}")
+            if media.code:
+                print(f"  - Reel URL: https://www.instagram.com/reel/{media.code}/")
+
         if first_comment:
             cl.media_comment(media.id, first_comment)
             print("Posted first comment.")
             
+    except LoginRequired:
+        print("\n--- INSTAGRAM LOGIN EXPIRED ---")
+        print("Your session has expired or is invalid.")
+        print("Please run the login helper script again to re-authorize:")
+        print("python src/instagram/login_helper.py")
+        print("---------------------------------\n")
     except Exception as e:
-        print(f"An error occurred during Reel upload: {e}")
+        print(f"An unknown error occurred during Reel upload: {e}")
 
 if __name__ == "__main__":
     # For direct testing

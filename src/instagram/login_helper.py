@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from instagrapi import Client
 from dotenv import load_dotenv
+import sys
 
 print("--- Instagram Login Helper ---")
 print("This script will help you log in to Instagram and save your session.")
@@ -22,11 +23,21 @@ if not username or not password:
     password = input("Please enter your Instagram password: ")
 
 print(f"Logging in as {username}...")
-# The login function will prompt for 2FA if needed
-cl.login(username, password)
 
-# Save the session
-cl.dump_settings(session_file)
-
-print(f"\nSUCCESS! Session has been saved to '{session_file}'.")
-print("The main script can now upload to Instagram without needing to log in again.") 
+try:
+    cl.login(username, password)
+    # Save the session only if login is successful
+    cl.dump_settings(session_file)
+    print(f"\nSUCCESS! Session has been saved to '{session_file}'.")
+    print("The main script can now upload to Instagram without needing to log in again.")
+except Exception as e:
+    print(f"\nERROR: Login failed. Reason: {e}")
+    if "challenge_required" in str(e) or "Please check the code" in str(e):
+        print("Instagram is requiring additional verification (challenge/2FA).\n" \
+              "Please check your email/phone for a code, and try again.\n" \
+              "If the problem persists, log in via browser to complete any security checks.")
+    elif "Please wait a few minutes before you try again." in str(e):
+        print("Instagram is rate-limiting your login attempts. Please wait and try again later.")
+    else:
+        print("An unknown error occurred. Please check your credentials and network connection.")
+    sys.exit(1) 

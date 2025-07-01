@@ -12,14 +12,14 @@ IMPORTANT: Before running this script, you need to:
 2. Select your project
 3. Go to APIs & Services > Credentials
 4. Edit your OAuth 2.0 Client ID
-5. Add this to "Authorized redirect URIs": http://localhost:8090/
+5. Add this to "Authorized redirect URIs": http://localhost:8080/
 6. Download the updated client_secrets.json
 """
 
 # OAuth 2.0 credentials
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 TOKEN_PICKLE_FILE = 'token.pickle'
-OAUTH_PORT = 8090  # Changed to avoid conflicts
+OAUTH_PORT = 8080
 
 def get_authenticated_service():
     """Get YouTube API credentials and build service."""

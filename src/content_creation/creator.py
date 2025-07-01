@@ -4,6 +4,7 @@ import asyncio
 import requests
 import textwrap
 import random
+import time
 from moviepy.editor import (
     VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip,
     concatenate_videoclips, TextClip
@@ -45,6 +46,15 @@ async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir:
         print(f"\n1. Generating {int(duration/60)} min script for '{topic}'...")
         script = generate_script(topic, duration)
         generate_realistic_voice(script, audio_path)
+
+        # --- FIX: Wait for the audio file to be ready ---
+        for _ in range(10): # Try for 5 seconds
+            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                break
+            time.sleep(0.5)
+        else:
+            raise FileNotFoundError(f"Audio file was not created or is empty: {audio_path}")
+        # --- END FIX ---
         
         with AudioFileClip(audio_path) as voiceover_clip:
             actual_duration = voiceover_clip.duration
@@ -103,7 +113,9 @@ async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir:
                 remove_temp=True,
                 threads=2,
                 preset='ultrafast',
-                logger='bar'
+                logger='bar',
+                fps=24,
+                audio_fps=22050
             )
         
         print(f"Video created successfully: {final_video_path}")

@@ -44,7 +44,8 @@ def generate_realistic_voice(text: str, output_path: str):
     # --- Attempt 2: Fallback to gTTS ---
     try:
         print("Generating voice with gTTS as a fallback...")
-        tts = gTTS(text=text, lang='hi', slow=False)
+        # Using a specific TLD can help avoid regional rate-limiting issues.
+        tts = gTTS(text=text, lang='hi', tld='co.in', slow=False)
         tts.save(output_path)
         print(f"Successfully generated voice with gTTS and saved to {output_path}")
     except Exception as e:

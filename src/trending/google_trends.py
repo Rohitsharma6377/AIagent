@@ -21,19 +21,96 @@ CATEGORIES = {
 }
 
 FALLBACK_TOPICS = {
-    'TECHNOLOGY': ['AI Breakthroughs', 'New Gadgets 2024', '5G Technology Explained'],
-    'BUSINESS': ['Startup Success Stories', 'Investment Tips', 'Future of Work'],
-    'SPORTS': ['Latest Cricket Highlights', 'Football Skills', 'Top 10 Athletes'],
-    'ENTERTAINMENT': ['Best Movies of the Year', 'Celebrity News', 'New Music Releases'],
-    'HEALTH': ['Mindfulness and Meditation', 'Healthy Eating Tips', 'At-Home Workouts'],
-    'SCIENCE': ['Mind-blowing Science Facts', 'Mysteries of the Universe', 'Everyday Science Experiments'],
-    'CULTURE': ['Incredible India', 'Indian Festivals', 'Traditional Indian Food'],
-    'TRAVEL': ['Top 10 Places to Visit in India', 'Himalayan Adventures', 'Beaches of Goa'],
-    'POLITICS': ['Indian Election Explained', 'New Government Policies', 'Indian Political History'],
-    'ASTROLOGY': ['Daily Horoscope', 'Zodiac Sign Facts', 'Planetary Transits Explained'],
-    'FUNNY': ['Latest Funny Memes', 'Stand Up Comedy Clips', 'Hilarious Animal Videos'],
-    'MEMES': ['Latest Funny Memes', 'Dank Memes', 'Viral Memes'],
+    'TECHNOLOGY': [
+        'AI Breakthroughs', 'New Gadgets 2024', '5G Technology Explained',
+        'Quantum Computing Basics', 'How Blockchain Works', 'The Future of Robotics',
+        'SpaceX Starship Updates', 'Virtual Reality in 2024', 'Top Programming Languages',
+        'Cybersecurity Tips', 'Smart Home Innovations', 'Wearable Tech Trends'
+    ],
+    'BUSINESS': [
+        'Startup Success Stories', 'Investment Tips', 'Future of Work',
+        'How to Start a Business', 'Stock Market Basics', 'Entrepreneurship in India',
+        'Remote Work Trends', 'Personal Finance Hacks', 'Women in Business',
+        'Marketing Strategies', 'E-commerce Growth', 'Sustainable Businesses'
+    ],
+    'SPORTS': [
+        'Latest Cricket Highlights', 'Football Skills', 'Top 10 Athletes',
+        'Olympic Records', 'Famous Indian Sports Moments', 'How to Improve Stamina',
+        'Yoga for Athletes', 'Best Sports Movies', 'Women in Sports',
+        'Sports Nutrition', 'Motivational Sports Stories', 'Upcoming Tournaments'
+    ],
+    'ENTERTAINMENT': [
+        'Best Movies of the Year', 'Celebrity News', 'New Music Releases',
+        'Bollywood vs Hollywood', 'Top Web Series', 'Movie Review: Latest Blockbuster',
+        'Behind the Scenes: Film Making', 'Music Trends 2024', 'Stand-up Comedy',
+        'Dance Challenges', 'Viral Entertainment Videos', 'Award Show Highlights'
+    ],
+    'HEALTH': [
+        'Mindfulness and Meditation', 'Healthy Eating Tips', 'At-Home Workouts',
+        'Mental Health Awareness', 'Yoga for Beginners', 'Superfoods Explained',
+        'How to Sleep Better', 'Fitness Myths Busted', 'Immunity Boosting Tips',
+        'Healthy Habits for Kids', 'Stress Management', 'Benefits of Walking'
+    ],
+    'SCIENCE': [
+        'Mind-blowing Science Facts', 'Mysteries of the Universe', 'Everyday Science Experiments',
+        'Space Exploration', 'Famous Scientists', 'How Vaccines Work',
+        'Climate Change Explained', 'Physics in Daily Life', 'The Human Brain',
+        'Genetics Basics', 'Renewable Energy', 'Cool Chemistry Tricks'
+    ],
+    'CULTURE': [
+        'Incredible India', 'Indian Festivals', 'Traditional Indian Food',
+        'Folk Dances of India', 'Indian Mythology', 'Cultural Diversity',
+        'Art and Craft Traditions', 'Famous Indian Monuments', 'Indian Languages',
+        'History of Yoga', 'Indian Literature', 'Bollywood Culture'
+    ],
+    'TRAVEL': [
+        'Top 10 Places to Visit in India', 'Himalayan Adventures', 'Beaches of Goa',
+        'Backpacking Tips', 'Wildlife Sanctuaries', 'Travel on a Budget',
+        'Hidden Gems of India', 'Road Trips', 'Travel Safety Tips',
+        'Cultural Etiquette', 'Best Street Food', 'Eco-friendly Travel'
+    ],
+    'POLITICS': [
+        'Indian Election Explained', 'New Government Policies', 'Indian Political History',
+        'Women in Politics', 'Youth and Politics', 'Famous Political Leaders',
+        'How Laws are Made', 'Political Debates', 'Role of Media in Politics',
+        'Constitution of India', 'Voting Rights', 'Recent Political Events'
+    ],
+    'ASTROLOGY': [
+        'Daily Horoscope', 'Zodiac Sign Facts', 'Planetary Transits Explained',
+        'Astrology vs Science', 'Famous Astrologers', 'Birth Chart Basics',
+        'Love Compatibility', 'Career Predictions', 'Astrology in Indian Culture',
+        'Numerology', 'Palmistry', 'Vastu Shastra'
+    ],
+    'FUNNY': [
+        'Latest Funny Memes', 'Stand Up Comedy Clips', 'Hilarious Animal Videos',
+        'Prank Videos', 'Funny Kids Moments', 'Comedy Skits',
+        'Fails Compilation', 'Funny Dance Moves', 'Viral Jokes',
+        'Comedy Roast', 'Parody Songs', 'Funny Voiceovers'
+    ],
+    'MEMES': [
+        'Latest Funny Memes', 'Dank Memes', 'Viral Memes',
+        'Classic Memes', 'Relatable Memes', 'Trending Meme Formats',
+        'Meme History', 'Indian Memes', 'Wholesome Memes',
+        'Savage Memes', 'Meme Challenges', 'Meme Reactions'
+    ],
+    'ANIME': [
+        'Create an Anime Movie: Friendship Adventure',
+        'Anime Battle: Heroes vs Villains',
+        'Slice of Life: A Day in Tokyo',
+        'Anime Romance: School Festival',
+        'Anime Mystery: The Lost Artifact',
+        'Anime Sports: The Underdog Team',
+        'Anime Sci-Fi: Robots and Dreams',
+        'Anime Fantasy: Magical Quest',
+        'Anime Comedy: Everyday Laughs',
+        'Anime Horror: Haunted School',
+        'Anime Family: Sibling Bonds',
+        'Anime Music: The Band Story'
+    ]
 }
+
+# Track used topics in memory for this session
+USED_TOPICS = set()
 
 class TrendingTopicsFetcher:
     def __init__(self, region='IN'):
@@ -80,15 +157,29 @@ class TrendingTopicsFetcher:
         except Exception as e:
             print(f"Error fetching trends: {e}. Using fallback topics.")
             if category_name and category_name in FALLBACK_TOPICS:
-                return FALLBACK_TOPICS[category_name]
+                # Remove used topics from fallback
+                available = [t for t in FALLBACK_TOPICS[category_name] if t not in USED_TOPICS]
+                if not available:
+                    # Reset if all topics used
+                    USED_TOPICS.clear()
+                    available = FALLBACK_TOPICS[category_name][:]
+                return available
             all_fallback = []
+            for topics in FALLBACK_TOPICS.values():
+                all_fallback.extend([t for t in topics if t not in USED_TOPICS])
+            if not all_fallback:
+                USED_TOPICS.clear()
             for topics in FALLBACK_TOPICS.values():
                 all_fallback.extend(topics)
             return all_fallback
 
     def get_random_topic(self, category=None):
-        trends = asyncio.run(self.get_topics(category))
-        return random.choice(trends) if trends else None
+        topics = self.get_topics(category)
+        if not topics:
+            return None
+        topic = random.choice(topics)
+        USED_TOPICS.add(topic)
+        return topic
 
 if __name__ == "__main__":
     fetcher = TrendingTopicsFetcher(region='IN')

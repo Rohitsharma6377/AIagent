@@ -5,6 +5,8 @@ import requests
 import textwrap
 import random
 import time
+import json
+import re
 from moviepy.editor import (
     VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip,
     concatenate_videoclips, TextClip, ImageClip
@@ -12,6 +14,12 @@ from moviepy.editor import (
 import moviepy.audio.fx.all as afx
 from src.content_creation.script_generator import generate_script, parse_script_to_dialogues
 from src.content_creation.voice_generator import generate_realistic_voice, generate_multi_voice
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+import urllib.request
+import hashlib
+import glob
+import subprocess
 
 # Subtitle creation is temporarily removed to prevent ImageMagick errors.
 # def create_subtitle_clips(script, video_duration, video_size):
@@ -25,168 +33,435 @@ async def download_media(url, path):
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
 
-async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir: str = "."):
+# Persistent storage for used (topic, video_url, song_url) combinations
+USED_COMBINATIONS_FILE = 'used_reel_combinations.json'
+
+def load_used_combinations():
+    if os.path.exists(USED_COMBINATIONS_FILE):
+        with open(USED_COMBINATIONS_FILE, 'r') as f:
+            return set(tuple(x) for x in json.load(f))
+    return set()
+
+def save_used_combinations(used_combinations):
+    with open(USED_COMBINATIONS_FILE, 'w') as f:
+        json.dump([list(x) for x in used_combinations], f)
+
+# Video categories/queries for unique backgrounds
+VIDEO_CATEGORIES = ['love', 'couple', 'nature', 'city', 'animals', 'sports', 'dance', 'food', 'travel', 'art', 'fashion', 'technology', 'festival', 'party', 'adventure', 'ocean', 'mountain', 'forest', 'desert', 'rain', 'sunset']
+
+# Music URLs for each language
+MUSIC_TRACKS = {
+    'english': [
+        'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
+        'https://samplelib.com/lib/preview/mp3/sample-6s.mp3',
+    ],
+    'punjabi': [
+        'https://samplelib.com/lib/preview/mp3/sample-9s.mp3',
+        'https://samplelib.com/lib/preview/mp3/sample-12s.mp3',
+    ],
+    'hindi': [
+        'https://samplelib.com/lib/preview/mp3/sample-15s.mp3',
+        'https://samplelib.com/lib/preview/mp3/sample-18s.mp3',
+    ],
+    'haryanvi': [
+        'https://samplelib.com/lib/preview/mp3/sample-21s.mp3',
+        'https://samplelib.com/lib/preview/mp3/sample-24s.mp3',
+    ],
+}
+
+# Trending song clips for each language (replace with real URLs if available)
+TRENDING_SONG_CLIPS = {
+    'english': [
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3',
+    ],
+    'punjabi': [
+        'https://filesamples.com/samples/audio/mp3/sample1.mp3',  # Demo sample, replace with real Bhangra if available
+        'https://filesamples.com/samples/audio/mp3/sample3.mp3',
+        'https://filesamples.com/samples/audio/mp3/sample6.mp3',
+        'https://filesamples.com/samples/audio/mp3/sample7.mp3',
+    ],
+    'hindi': [
+        'https://filesamples.com/samples/audio/mp3/sample2.mp3',  # Demo sample, replace with real Bollywood if available
+        'https://filesamples.com/samples/audio/mp3/sample5.mp3',
+        'https://filesamples.com/samples/audio/mp3/sample8.mp3',
+        'https://filesamples.com/samples/audio/mp3/sample10.mp3',
+    ],
+    'haryanvi': [
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3',  # Use English as fallback
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3',
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3',
+        'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3',
+    ],
+}
+
+# Video search queries for each language/theme
+VIDEO_QUERIES = {
+    'english': ['english party', 'english dance', 'english city', 'english friends'],
+    'punjabi': ['punjabi dance', 'punjabi wedding', 'punjabi festival', 'punjabi bhangra'],
+    'hindi': ['hindi movie', 'hindi dance', 'hindi festival', 'hindi city'],
+    'haryanvi': ['haryanvi village', 'haryanvi dance', 'haryanvi festival', 'haryanvi wedding'],
+}
+
+# Jamendo API credentials (register for your own client_id at https://developer.jamendo.com/v3.0)
+JAMENDO_CLIENT_ID = os.getenv('JAMENDO_CLIENT_ID', 'demo_client_id')
+
+# Map language to Jamendo tags/genres
+JAMENDO_LANG_TAGS = {
+    'english': 'english',
+    'punjabi': 'punjabi',
+    'hindi': 'hindi',
+    'haryanvi': 'haryanvi',
+}
+
+def fetch_jamendo_song(language):
     """
-    Creates a high-quality video, storing all intermediate files in a sub-folder of the output directory.
-    If topic is anime/movie, creates a simple animated movie with multiple character voices and placeholder images.
+    Fetch a trending song from Jamendo for the given language.
+    Returns a direct MP3 URL or None if not found.
+    """
+    tag = JAMENDO_LANG_TAGS.get(language, 'english')
+    url = f"https://api.jamendo.com/v3.0/tracks/?client_id={JAMENDO_CLIENT_ID}&format=json&limit=10&tags={tag}&audioformat=mp32&order=popularity_total"
+    try:
+        resp = requests.get(url)
+        data = resp.json()
+        tracks = data.get('results', [])
+        for track in tracks:
+            audio_url = track.get('audio')
+            if audio_url:
+                return audio_url
+    except Exception as e:
+        print(f"[Jamendo] Error fetching song for {language}: {e}")
+    return None
+
+# Helper to get the next unique (topic, video_url, song_url) for a non-voice reel
+async def get_next_unique_combo(topic, used_combinations, lang, output_dir):
+    api_key = os.getenv("PEXELS_API_KEY")
+    for video_query in VIDEO_QUERIES[lang]:
+        # Search Pexels for a video
+        search_url = f"https://api.pexels.com/videos/search?query={video_query}&per_page=5&orientation=portrait"
+        response = requests.get(search_url, headers={'Authorization': api_key})
+        response.raise_for_status()
+        videos_json = response.json().get('videos', [])
+        for video_data in videos_json:
+            video_url = next((f['link'] for f in video_data['video_files'] if f['quality'] == 'hd'), video_data['video_files'][0]['link'])
+            for song_url in TRENDING_SONG_CLIPS[lang]:
+                combo = (topic, video_url, song_url)
+                if combo not in used_combinations:
+                    # Download video to temp dir
+                    video_path = os.path.join(output_dir, f"{lang}_{video_query.replace(' ','_')}_{video_data['id']}.mp4")
+                    if not os.path.exists(video_path):
+                        await download_media(video_url, video_path)
+                    return combo, video_path, song_url
+    # If all combinations used, reset
+    used_combinations.clear()
+    save_used_combinations(used_combinations)
+    # Try again after reset
+    return await get_next_unique_combo(topic, used_combinations, lang, output_dir)
+
+def sanitize_filename(name):
+    # Remove invalid characters for Windows paths
+    return re.sub(r'[^a-zA-Z0-9_\- ]', '', name).replace(' ', '_')
+
+# Persistent storage for used video URLs and (video, song) combos
+USED_VIDEOS_FILE = 'used_videos_global.json'
+USED_COMBOS_FILE = 'used_video_song_combos_global.json'
+
+def load_used_videos():
+    if os.path.exists(USED_VIDEOS_FILE):
+        with open(USED_VIDEOS_FILE, 'r') as f:
+            return set(json.load(f))
+    return set()
+
+def save_used_videos(used_videos):
+    with open(USED_VIDEOS_FILE, 'w') as f:
+        json.dump(list(used_videos), f)
+
+def load_used_combos():
+    if os.path.exists(USED_COMBOS_FILE):
+        with open(USED_COMBOS_FILE, 'r') as f:
+            return set(tuple(x) for x in json.load(f))
+    return set()
+
+def save_used_combos(used_combos):
+    with open(USED_COMBOS_FILE, 'w') as f:
+        json.dump([list(x) for x in used_combos], f)
+
+# Spotify API helper
+sp = None
+SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
+SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
+print(f"[DEBUG] SPOTIFY_CLIENT_ID={'SET' if SPOTIFY_CLIENT_ID else 'NOT SET'}, SPOTIFY_CLIENT_SECRET={'SET' if SPOTIFY_CLIENT_SECRET else 'NOT SET'}")
+if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+    print("[ERROR] Spotify credentials are missing from your .env file. Please set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.")
+    raise RuntimeError("Spotify credentials missing. Cannot fetch Spotify previews.")
+if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
+    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+        client_id=SPOTIFY_CLIENT_ID,
+        client_secret=SPOTIFY_CLIENT_SECRET
+    ))
+
+SPOTIFY_MARKET = {
+    'english': 'US',
+    'hindi': 'IN',
+    'punjabi': 'IN',
+}
+SPOTIFY_PLAYLISTS = {
+    'english': '37i9dQZEVXbLRQDuF5jeBp',  # US Top 50
+    'hindi': '37i9dQZF1DXd8cOUiye1o2',    # Bollywood Top 50
+    'punjabi': '37i9dQZF1DX5cZuAHLNjGz',  # Punjabi 101
+}
+
+SPOTIFY_ARTISTS = [
+    'Justin Bieber',
+    'Sidhu Moose Wala',
+    'Arijit Singh',
+    'Diljit Dosanjh',
+    'Taylor Swift',
+    'AP Dhillon',
+]
+
+def fetch_spotify_artist_top_preview():
+    if not sp:
+        return None, None, None
+    random.shuffle(SPOTIFY_ARTISTS)
+    for artist_name in SPOTIFY_ARTISTS:
+        try:
+            results = sp.search(q=f'artist:{artist_name}', type='artist', limit=1)
+            items = results['artists']['items']
+            if not items:
+                continue
+            artist_id = items[0]['id']
+            top_tracks = sp.artist_top_tracks(artist_id)
+            tracks = top_tracks['tracks']
+            random.shuffle(tracks)
+            for track in tracks:
+                name = track['name']
+                artist = track['artists'][0]['name']
+                preview_url = track['preview_url']
+                if preview_url:
+                    print(f"[Spotify] Selected: {name} by {artist} - {preview_url}")
+                    return name, artist, preview_url
+        except Exception as e:
+            print(f"[Spotify] Error fetching top tracks for {artist_name}: {e}")
+    return None, None, None
+
+async def create_video(topic: str, duration: int, aspect_ratio: str, output_dir: str = ".", music_url: str = None, reel_index: int = 0, voice_reel: bool = False, use_spotify: bool = True):
+    """
+    For non-voice reels: Use a trending song clip and a unique video (never repeat combination).
+    For every 5th reel (voice_reel=True): Use the current voiceover logic and a unique video on the topic.
     """
     api_key = os.getenv("PEXELS_API_KEY")
     if not api_key:
         raise ValueError("PEXELS_API_KEY environment variable not set.")
-
-    temp_dir = os.path.join(output_dir, f"temp_{topic.replace(' ', '_')}_{random.randint(1000, 9999)}")
+    # Sanitize topic for temp_dir
+    safe_topic = sanitize_filename(topic)
+    temp_dir = os.path.join(output_dir, f"temp_{safe_topic}_{random.randint(1000, 9999)}")
     os.makedirs(temp_dir, exist_ok=True)
     
     video_clips_handles = []
     created_successfully = False
     
+    # Load used combinations
+    used_videos = load_used_videos()
+    used_combos = load_used_combos()
+    
     try:
-        audio_path = os.path.join(temp_dir, "voiceover.mp3")
-        music_path = os.path.join(temp_dir, "music.mp3")
-        
-        print(f"\n1. Generating {int(duration/60)} min script for '{topic}'...")
-        script = generate_script(topic, duration)
-        # --- Anime/Movie special handling ---
-        if 'anime' in topic.lower() or 'movie' in topic.lower():
-            print("Detected anime/movie topic. Generating multi-character voices and animation...")
-            dialogues = parse_script_to_dialogues(script)
-            audio_paths = generate_multi_voice(dialogues, temp_dir)
-            # Use placeholder character images (free, local or from the web)
-            character_images = {}
-            for character, _ in dialogues:
-                if character not in character_images:
-                    # Download or use a local placeholder image for each character
-                    img_path = os.path.join(temp_dir, f"{character.replace(' ', '_')}.png")
-                    if not os.path.exists(img_path):
-                        # Download a free anime avatar (placeholder)
-                        url = "https://api.multiavatar.com/" + character + ".png"
-                        try:
-                            r = requests.get(url)
-                            with open(img_path, 'wb') as f:
-                                f.write(r.content)
-                        except Exception:
-                            # fallback to a solid color image
-                            from PIL import Image
-                            img = Image.new('RGB', (512, 512), (random.randint(0,255), random.randint(0,255), random.randint(0,255)))
-                            img.save(img_path)
-                    character_images[character] = img_path
-            # Create a video clip for each dialogue line
-            clips = []
-            for idx, ((character, line), audio_file) in enumerate(zip(dialogues, audio_paths)):
-                img_path = character_images[character]
-                audio_clip = AudioFileClip(audio_file)
-                img_clip = ImageClip(img_path).set_duration(audio_clip.duration).resize(height=720)
-                img_clip = img_clip.set_audio(audio_clip)
-                # Add character name as text overlay
-                txt_clip = TextClip(character, fontsize=48, color='white', bg_color='black', size=(img_clip.w, 60)).set_duration(audio_clip.duration)
-                txt_clip = txt_clip.set_position(('center', 'bottom'))
-                final_clip = CompositeVideoClip([img_clip, txt_clip])
-                clips.append(final_clip)
-            final_video = concatenate_videoclips(clips, method="compose")
-            final_video_path = os.path.join(output_dir, f"{topic.replace(' ', '_')}_{aspect_ratio}_ANIME.mp4")
-            final_video.write_videofile(
-                final_video_path,
-                codec='libx264',
-                audio_codec='aac',
-                temp_audiofile=os.path.join(temp_dir, 'temp-audio.m4a'),
-                remove_temp=True,
-                threads=2,
-                preset='ultrafast',
-                logger='bar',
-                fps=24,
-                audio_fps=22050
-            )
-            print(f"Anime movie created successfully: {final_video_path}")
+        if voice_reel:
+            # --- Voice Reel: Generate script and voiceover, use unique video on topic ---
+            print(f"\n1. Generating {int(duration/60)} min script for '{topic}' (voice reel)...")
+            audio_path = os.path.join(temp_dir, "voiceover.mp3")
+            script = generate_script(topic, duration)
+            generate_realistic_voice(script, audio_path)
+            for _ in range(10):
+                if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                    break
+                time.sleep(0.5)
+            else:
+                raise FileNotFoundError(f"Audio file was not created or is empty: {audio_path}")
+            with AudioFileClip(audio_path) as voiceover_clip:
+                actual_duration = voiceover_clip.duration
+            # Search Pexels for a unique video on the topic
+            search_url = f"https://api.pexels.com/videos/search?query={topic}&per_page=5&orientation=portrait"
+            response = requests.get(search_url, headers={'Authorization': api_key})
+            response.raise_for_status()
+            videos_json = response.json().get('videos', [])
+            for video_data in videos_json:
+                video_url = next((f['link'] for f in video_data['video_files'] if f['quality'] == 'hd'), video_data['video_files'][0]['link'])
+                combo = (topic, video_url, 'voice')
+                if combo not in used_combos:
+                    video_path = os.path.join(temp_dir, f"voice_{topic.replace(' ','_')}_{video_data['id']}.mp4")
+                    await download_media(video_url, video_path)
+                    used_combos.add(combo)
+                    save_used_combos(used_combos)
+                    break
+            else:
+                # If all combinations used, reset
+                used_combos.clear()
+                save_used_combos(used_combos)
+                return await create_video(topic, duration, aspect_ratio, output_dir, music_url, reel_index, voice_reel, use_spotify)
+            video_paths = [video_path]
+            print(f"2. Assembling voice reel with unique video...")
+            video_clips_handles = [VideoFileClip(vp) for vp in video_paths if os.path.exists(vp)]
+            with concatenate_videoclips(video_clips_handles, method="compose") as background_video, \
+                 AudioFileClip(audio_path) as main_audio_clip:
+                looped_audio = afx.audio_loop(main_audio_clip, duration=background_video.duration)
+                background_video.audio = looped_audio
+                if main_audio_clip.duration < background_video.duration:
+                    background_video = background_video.subclip(0, main_audio_clip.duration)
+                final_clip = background_video
+                final_video_path = os.path.join(output_dir, f"{safe_topic}_{aspect_ratio}_voice.mp4")
+                final_clip.write_videofile(
+                    final_video_path,
+                    codec='libx264',
+                    audio_codec='aac',
+                    temp_audiofile=os.path.join(temp_dir, 'temp-audio.m4a'),
+                    remove_temp=True,
+                    threads=2,
+                    preset='ultrafast',
+                    logger='bar',
+                    fps=24,
+                    audio_fps=22050
+                )
+            print(f"Voice reel created successfully: {final_video_path}")
             created_successfully = True
-            return final_video_path
-        # --- END Anime/Movie special handling ---
-        
-        generate_realistic_voice(script, audio_path)
-
-        # --- FIX: Wait for the audio file to be ready ---
-        for _ in range(10): # Try for 5 seconds
-            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-                break
-            time.sleep(0.5)
+            return final_video_path, None
         else:
-            raise FileNotFoundError(f"Audio file was not created or is empty: {audio_path}")
-        # --- END FIX ---
-        
-        with AudioFileClip(audio_path) as voiceover_clip:
-            actual_duration = voiceover_clip.duration
-
-        print("2. Downloading background videos and music...")
-        orientation = 'portrait' if aspect_ratio == 'portrait' else 'landscape'
-        
-        # Limit the number of clips to download.
-        num_clips = 3 if aspect_ratio == 'portrait' else 5
-        
-        search_url = f"https://api.pexels.com/videos/search?query={topic}&per_page={num_clips}&orientation={orientation}"
-        
-        response = requests.get(search_url, headers={'Authorization': api_key})
-        response.raise_for_status()
-        videos_json = response.json().get('videos', [])
-        if not videos_json:
-            raise ValueError(f"No videos found for topic: {topic}")
-
-        download_tasks = []
-        video_paths = []
-        for i, video_data in enumerate(videos_json):
-            video_url = next((f['link'] for f in video_data['video_files'] if f['quality'] == 'hd'), video_data['video_files'][0]['link'])
-            video_path = os.path.join(temp_dir, f"video_{i}.mp4")
-            video_paths.append(video_path)
-            download_tasks.append(download_media(video_url, video_path))
-
-        music_url = "https://www.bensound.com/bensound-music/bensound-creativeminds.mp3"
-        download_tasks.append(download_media(music_url, music_path))
-        
-        await asyncio.gather(*download_tasks)
-
-        print("3. Assembling video with transitions and effects...")
-        
-        video_clips_handles = [VideoFileClip(vp) for vp in video_paths if os.path.exists(vp)]
-        
-        with concatenate_videoclips(video_clips_handles, method="compose") as background_video, \
-             AudioFileClip(music_path).volumex(0.1) as music_clip, \
-             AudioFileClip(audio_path) as voiceover_clip_handle:
-
-            looped_music = afx.audio_loop(music_clip, duration=voiceover_clip_handle.duration)
-
-            final_audio = CompositeAudioClip([voiceover_clip_handle, looped_music])
-            background_video.audio = final_audio
-            if voiceover_clip_handle.duration < background_video.duration:
-                background_video = background_video.subclip(0, voiceover_clip_handle.duration)
-
-            # Subtitles are disabled to fix the ImageMagick error.
-            final_clip = background_video
-            
-            final_video_path = os.path.join(output_dir, f"{topic.replace(' ', '_')}_{aspect_ratio}.mp4")
-            final_clip.write_videofile(
-                final_video_path,
-                codec='libx264',
-                audio_codec='aac',
-                temp_audiofile=os.path.join(temp_dir, 'temp-audio.m4a'),
-                remove_temp=True,
-                threads=2,
-                preset='ultrafast',
-                logger='bar',
-                fps=24,
-                audio_fps=22050
-            )
-        
-        print(f"Video created successfully: {final_video_path}")
-        created_successfully = True
-        return final_video_path
-
+            # For music reels, always use 30 seconds (Spotify preview duration)
+            duration = 30
+            langs = ['english', 'punjabi', 'hindi']
+            lang = langs[reel_index % len(langs)]
+            if not use_spotify:
+                # Always use a local fallback MP3 from downloaded_songs/
+                fallback_mp3s = glob.glob('downloaded_songs/*.mp3')
+                if not fallback_mp3s:
+                    print("[FALLBACK ERROR] No fallback MP3s found in downloaded_songs/. Skipping this music reel.")
+                    return None, None
+                fallback_song = random.choice(fallback_mp3s)
+                print(f"[FALLBACK] Using local fallback song: {fallback_song}")
+                # Use ffmpeg to extract a 30s clip starting at 20s
+                audio_path = os.path.join(temp_dir, "song.mp3")
+                try:
+                    subprocess.run([
+                        'ffmpeg', '-y', '-ss', '20', '-t', '30', '-i', fallback_song, '-acodec', 'libmp3lame', audio_path
+                    ], check=True)
+                except Exception as e:
+                    print(f"[FALLBACK ERROR] Failed to extract middle clip: {e}")
+                    return None, None
+                song_url = fallback_song
+                song_title = os.path.splitext(os.path.basename(fallback_song))[0]
+                song_artist = "Fallback"
+            else:
+                # --- Use Spotify API for top artist track ---
+                song_title, song_artist, preview_url = fetch_spotify_artist_top_preview()
+                if not song_title or not song_artist or not preview_url:
+                    print("[ERROR] Could not fetch a Spotify preview. Using fallback local song.")
+                    # Fallback: use a random local MP3 from downloaded_songs/
+                    fallback_mp3s = glob.glob('downloaded_songs/*.mp3')
+                    if not fallback_mp3s:
+                        print("[FALLBACK ERROR] No fallback MP3s found in downloaded_songs/. Skipping this music reel.")
+                        return None, None
+                    fallback_song = random.choice(fallback_mp3s)
+                    print(f"[FALLBACK] Using local fallback song: {fallback_song}")
+                    # Use ffmpeg to extract a 30s clip starting at 20s
+                    audio_path = os.path.join(temp_dir, "song.mp3")
+                    try:
+                        subprocess.run([
+                            'ffmpeg', '-y', '-ss', '20', '-t', '30', '-i', fallback_song, '-acodec', 'libmp3lame', audio_path
+                        ], check=True)
+                    except Exception as e:
+                        print(f"[FALLBACK ERROR] Failed to extract middle clip: {e}")
+                        return None, None
+                    song_url = fallback_song
+                    song_title = os.path.splitext(os.path.basename(fallback_song))[0]
+                    song_artist = "Fallback"
+                else:
+                    audio_path = os.path.join(temp_dir, "song.mp3")
+                    song_url = preview_url
+                    print(f"[Spotify] Downloading preview audio: {song_url}")
+                    try:
+                        resp = requests.get(song_url, stream=True)
+                        resp.raise_for_status()
+                        with open(audio_path, 'wb') as f:
+                            for chunk in resp.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        size = os.path.getsize(audio_path)
+                        print(f"[Spotify] Preview audio downloaded: {audio_path} ({size} bytes)")
+                        if size < 1000:
+                            print(f"[Spotify] Downloaded file too small, not using: {audio_path}")
+                            raise Exception("Downloaded preview is too small.")
+                        # Save a copy in downloaded_songs
+                        os.makedirs('downloaded_songs', exist_ok=True)
+                        song_filename = f"{song_title or 'song'}_{song_artist or 'artist'}.mp3".replace(' ', '_')
+                        song_save_path = os.path.join('downloaded_songs', song_filename)
+                        shutil.copy(audio_path, song_save_path)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to download Spotify preview audio: {e}. Skipping this music reel.")
+                        return None, None
+            # Search Pexels for a matching video, ensuring global uniqueness
+            video_query = VIDEO_QUERIES[lang][reel_index % len(VIDEO_QUERIES[lang])]
+            search_url = f"https://api.pexels.com/videos/search?query={video_query}&per_page=15&orientation=portrait"
+            response = requests.get(search_url, headers={'Authorization': api_key})
+            response.raise_for_status()
+            videos_json = response.json().get('videos', [])
+            video_path = None
+            for video_data in videos_json:
+                video_url = next((f['link'] for f in video_data['video_files'] if f['quality'] == 'hd'), video_data['video_files'][0]['link'])
+                combo = (video_url, song_url)
+                if video_url not in used_videos and combo not in used_combos:
+                    video_path = os.path.join(temp_dir, f"{lang}_{video_query.replace(' ','_')}_{video_data['id']}.mp4")
+                    await download_media(video_url, video_path)
+                    used_videos.add(video_url)
+                    used_combos.add(combo)
+                    save_used_videos(used_videos)
+                    save_used_combos(used_combos)
+                    print(f"[INFO] Using unique video: {video_url}")
+                    break
+            if not video_path:
+                # If all videos/combos used, reset and try again
+                print("[RESET] All unique (video, song) pairs exhausted. Resetting global tracking.")
+                used_videos.clear()
+                used_combos.clear()
+                save_used_videos(used_videos)
+                save_used_combos(used_combos)
+                return await create_video(topic, duration, aspect_ratio, output_dir, music_url, reel_index, voice_reel, use_spotify)
+            video_paths = [video_path]
+            print(f"2. Assembling music reel with unique video and real song ({lang})...")
+            video_clips_handles = [VideoFileClip(vp) for vp in video_paths if os.path.exists(vp)]
+            try:
+                with concatenate_videoclips(video_clips_handles, method="compose") as background_video, \
+                     AudioFileClip(audio_path) as main_audio_clip:
+                    looped_audio = afx.audio_loop(main_audio_clip, duration=background_video.duration)
+                    background_video.audio = looped_audio
+                    if main_audio_clip.duration < background_video.duration:
+                        background_video = background_video.subclip(0, main_audio_clip.duration)
+                    final_clip = background_video
+                    final_video_path = os.path.join(output_dir, f"{safe_topic}_{aspect_ratio}_{lang}_music.mp4")
+                    final_clip.write_videofile(
+                        final_video_path,
+                        codec='libx264',
+                        audio_codec='aac',
+                        temp_audiofile=os.path.join(temp_dir, 'temp-audio.m4a'),
+                        remove_temp=True,
+                        threads=2,
+                        preset='ultrafast',
+                        logger='bar',
+                        fps=24,
+                        audio_fps=22050
+                    )
+                print(f"Music reel created successfully: {final_video_path}")
+                created_successfully = True
+                return final_video_path, song_url
+            except Exception as e:
+                print(f"[ERROR] Failed to combine video and audio: {e}")
+                raise
     finally:
-        # This block ensures all file handles are closed, even if an error occurred.
         for clip in video_clips_handles:
             try:
                 clip.close()
             except Exception:
                 pass
-        
-        # Only delete the temp folder if the video was created successfully.
         if created_successfully and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
             print(f"Cleaned up temporary directory: {temp_dir}")
@@ -275,6 +550,12 @@ def download_backgrounds(output_dir='backgrounds'):
 
 # Call this at the start of your pipeline to ensure backgrounds are available
 # backgrounds = download_backgrounds()
+
+# Add a random delay after each upload (to be called from main.py)
+def random_upload_delay():
+    delay = random.randint(300, 420)  # 5 to 7 minutes
+    print(f"[DELAY] Sleeping for {delay} seconds to mimic human behavior...")
+    time.sleep(delay)
 
 if __name__ == '__main__':
     from dotenv import load_dotenv

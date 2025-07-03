@@ -48,7 +48,7 @@ async def upload_reel(video_path, caption, first_comment=""):
         if first_comment:
             cl.media_comment(media.id, first_comment)
             print("Posted first comment.")
-            
+
     except LoginRequired:
         print("\n--- INSTAGRAM LOGIN EXPIRED ---")
         print("Your session has expired or is invalid.")
@@ -56,6 +56,15 @@ async def upload_reel(video_path, caption, first_comment=""):
         print("python src/instagram/login_helper.py")
         print("---------------------------------\n")
     except Exception as e:
+        error_str = str(e)
+        if 'feedback_required' in error_str:
+            print("\n[INSTAGRAM BLOCK] 'feedback_required' error detected. Instagram is restricting uploads due to suspected automation or policy violation.")
+            print("Uploads will be paused. Please check your Instagram app for any required verification or wait several hours before resuming.")
+            # Create a flag file to signal main loop to pause
+            with open('feedback_required.flag', 'w') as f:
+                f.write('Instagram feedback_required triggered. Manual action may be needed.')
+            # Raise a custom exception to be caught by the main loop
+            raise RuntimeError('INSTAGRAM_FEEDBACK_REQUIRED')
         print(f"An unknown error occurred during Reel upload: {e}")
 
 if __name__ == "__main__":
